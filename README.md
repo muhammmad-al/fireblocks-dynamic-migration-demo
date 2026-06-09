@@ -4,25 +4,17 @@
 
 A proof of concept demonstrating **private-key migration from Fireblocks Embedded Wallets (NCW) to Dynamic WaaS**. It uses **Fireblocks Full Key Takeover** to reconstruct the wallet's private key client-side (in the browser, via MPC), then **Dynamic's `importPrivateKey`** to import it into a Dynamic WaaS wallet. The **same on-chain address is preserved** — no asset transfer required.
 
-> ⚠️ Proof of concept — not production-hardened. The private key is reconstructed in browser memory during migration. See [Scope / Limitations](#8-scope--limitations).
+> ⚠️ Proof of concept — not production-hardened. The private key is reconstructed in browser memory during migration. See [Scope / Limitations](#7-scope--limitations).
 
 ## 2. Architecture
 
 ```
-┌─────────────────┐   JWT + REST/Socket.IO    ┌──────────────────┐   Fireblocks SDK   ┌────────────┐
-│    frontend     │ ────────────────────────► │     backend      │ ─────────────────► │ Fireblocks │
-│ React+Vite+TS   │ ◄──────────────────────── │ Express+TS+      │ ◄───webhooks────── │  platform  │
-│ (browser, MPC)  │   webhooks + tx updates   │ TypeORM + MySQL  │                    └────────────┘
-└────────┬────────┘                           └──────────────────┘
-         │ importPrivateKey
-         │ (private key NEVER leaves the browser / never hits the backend)
-         ▼
-   ┌──────────────┐
-   │ Dynamic WaaS │
-   └──────────────┘
+Browser ──takeover()──► private key ──importPrivateKey──► Dynamic WaaS
+   │
+   └── REST / Socket.IO ──► Backend (audit only) ──► Fireblocks
 ```
 
-The backend is an **audit witness only** — it records migration intent and outcome (wallet/asset IDs, addresses, match result) and **rejects any request containing key material**. See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the full build spec.
+The private key is reconstructed and imported entirely in the browser — it never reaches the backend, which only records the migration (addresses + match result) and rejects any request containing key material. See [ARCHITECTURE.md](./ARCHITECTURE.md) for full details.
 
 ## 3. Prerequisites
 
@@ -46,8 +38,15 @@ The backend is an **audit witness only** — it records migration intent and out
 | `FIREBLOCKS_API_KEY_NCW_ADMIN` | UUID of the **NCW Admin** API user |
 | `FIREBLOCKS_WEBHOOK_PUBLIC_KEY` | Fireblocks webhook **public key** PEM (differs sandbox vs prod) |
 | `FIREBLOCKS_API_BASE_URL` | `https://sandbox-api.fireblocks.io/` or `https://api.fireblocks.io/` |
-| `JWKS_URI` / `ISSUER` / `AUDIENCE` | Firebase JWT verification config (see [§5](#5-the-firebase-wiring-gotcha)) |
+| `JWKS_URI` / `ISSUER` / `AUDIENCE` | Firebase JWT verification config. `ISSUER` and `AUDIENCE` must reference the **same Firebase project ID** the frontend uses, or every backend request is rejected with 401 |
 | `DB_HOST` / `DB_PORT` / `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME` | MySQL connection |
+
+`ISSUER` / `AUDIENCE` take the form:
+
+```
+ISSUER   = https://securetoken.google.com/<firebase-project-id>
+AUDIENCE = <firebase-project-id>
+```
 
 ### Frontend config (NOT secrets) — `frontend/.env`
 All `VITE_`-prefixed vars are compiled into the browser bundle and are **publicly visible**.
@@ -60,18 +59,7 @@ All `VITE_`-prefixed vars are compiled into the browser bundle and are **publicl
 
 - **Firebase client config** is currently **hardcoded in `frontend/src/auth/FirebaseAuthManager.ts`**. Replace it with your own Firebase project's web config. (Firebase web config is public by design — not a secret.)
 
-## 5. The Firebase Wiring Gotcha
-
-The Firebase **project ID** used by the frontend's `FirebaseAuthManager.ts` **MUST match** the backend's `AUDIENCE` and `ISSUER` env vars:
-
-```
-ISSUER   = https://securetoken.google.com/<firebase-project-id>
-AUDIENCE = <firebase-project-id>
-```
-
-If they don't match, **every backend request returns 401** (you'll see a tight poll loop of 401s). Set them from one Firebase project.
-
-## 6. Setup
+## 5. Setup
 
 ```bash
 # 1. Clone
@@ -101,7 +89,7 @@ Then open **http://localhost:5173**.
 
 > Requires **Node 20** (both projects ship an `.nvmrc`; run `nvm use`). `jose` needs the global `fetch`/`Headers` from Node 18+.
 
-## 7. Running the Migration
+## 6. Running the Migration
 
 - **Log in** with Google (Firebase Auth).
 - **Generate MPC keys** (ECDSA SECP256K1).
@@ -109,7 +97,7 @@ Then open **http://localhost:5173**.
 - In the **"Key Migration"** card: click **Export Key** → **Import to Dynamic** (triggers Dynamic OTP login) → **Verify Ownership**.
 - **Confirm the Source (Fireblocks) and Target (Dynamic) addresses match.**
 
-## 8. Scope / Limitations
+## 7. Scope / Limitations
 
 - **Single-chain** (Sepolia `ETH_TEST5`), **ECDSA / EVM only**.
 - **Single device.**
@@ -117,9 +105,9 @@ Then open **http://localhost:5173**.
 - **Iframe security isolation** (to protect the in-browser key from malicious JS) is being developed separately by the Dynamic team.
 - **EdDSA / Solana** migration requires a separate `takeover()` call — same pattern, different BIP44 coin type.
 
-## 9. Links
+## 8. Links
 
 - Fireblocks Full Key Takeover: https://ncw-developers.fireblocks.com/docs/full-key-takeover
 - Fireblocks NCW JS SDK: https://www.npmjs.com/package/@fireblocks/ncw-js-sdk
 - Fireblocks NCW Setup Guide: https://ncw-developers.fireblocks.com/v4.0/docs/setup-5
-- Dynamic `importPrivateKey`: https://docs.dynamic.xyz/wallets/embedded-wallets/dynamic-waas
+- Dynamic — Import Private Keys: https://www.dynamic.xyz/docs/node/evm/import-private-keys
